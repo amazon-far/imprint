@@ -24,6 +24,10 @@ TASKS = (
     "swap_blocks",
 )
 
+# Same names as mme_vla_suite.shared.cosmo_buffer.MEMORY_ACTION_ALIGNMENTS (this launcher does
+# not import mme_vla_suite).
+MEMORY_ACTION_ALIGNMENTS = ("causal_raw_previous", "previous_kept_frame")
+
 PROFILES = {
     "full_attention": {
         "config": "imprint_rmbench_full_attention_memft",
@@ -63,6 +67,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8031)
     parser.add_argument("--startup-timeout", type=int, default=900)
+    parser.add_argument(
+        "--memory-action-alignment",
+        choices=MEMORY_ACTION_ALIGNMENTS,
+        default="causal_raw_previous",
+        help=(
+            "Action stored with each kept memory frame. causal_raw_previous (released "
+            "evaluator default): the action executed one raw step earlier. "
+            "previous_kept_frame: the action executed at the previous kept frame, as in "
+            "the offline variant files (paper Eq. A.1)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -124,6 +139,22 @@ def verify_simulator_runtime(
         )
 
 
+def policy_server_settings(
+    profile: dict[str, str], checkpoint: Path, memory_action_alignment: str
+) -> dict[str, object]:
+    """Settings for serve_robomme_tcp.py, kept in the run output as policy_server.yaml."""
+    return {
+        "adapter_module": profile["adapter"],
+        "policy_name": profile["adapter"],
+        "checkpoint": str(checkpoint),
+        "config_name": profile["config"],
+        "history_config": profile["history"],
+        "prediction_horizon": 50,
+        "seed": 42,
+        "memory_action_alignment": memory_action_alignment,
+    }
+
+
 def configure_deterministic_cuda(
     environment: dict[str, str], deterministic: str
 ) -> None:
@@ -166,15 +197,7 @@ def main() -> None:
     server_config = output / "policy_server.yaml"
     server_config.write_text(
         yaml.safe_dump(
-            {
-                "adapter_module": profile["adapter"],
-                "policy_name": profile["adapter"],
-                "checkpoint": str(checkpoint),
-                "config_name": profile["config"],
-                "history_config": profile["history"],
-                "prediction_horizon": 50,
-                "seed": 42,
-            },
+            policy_server_settings(profile, checkpoint, args.memory_action_alignment),
             sort_keys=False,
         )
     )

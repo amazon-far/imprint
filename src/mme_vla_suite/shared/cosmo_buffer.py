@@ -15,6 +15,17 @@ The recent visual window therefore spans every frame
 since the last finalized boundary (up to 2*chunk_frames-1 frames: the most recent complete
 provisional chunk plus the current partial chunk).
 
+Memory action alignment (the memory_action_alignment argument; only the RMBench launcher sets it).
+``add_buffer`` receives, for raw step s, the action that was executed from raw step s-1 (the
+evaluators pair each new observation with the action that produced it; step 0 has none).
+  * "causal_raw_previous" (DEFAULT, released evaluator behavior): kept frame r stores the
+    action supplied with step r, i.e. the action executed from raw step r-1. This is the
+    canonical action_causal stream sampled at the kept frames.
+  * "previous_kept_frame": kept frame f_j stores the action executed at the previous kept frame
+    f_{j-1}, and zeros for the first kept frame. This is paper Eq. A.1 and the rule of the
+    offline variant files (action_causal_v*.npy, shared/variant_actions.py). With
+    downsample == 1 the two modes are identical.
+
 Action encoding modes (config-selectable via action_encoding):
   * "raw_delta" (DEFAULT, backward compatible): cosmo_action_emb = concat(action, Δaction),
     width = 2*action_dim (=24 for the 12-dim robocasa action). Δ[i]=action[i]-action[i-1].
@@ -39,6 +50,11 @@ from openpi.shared import image_tools
 
 
 _DINOV3_ENCODER_CACHE = {}
+# benchmarks/rmbench/eval/run_local.py repeats these names (it does not import mme_vla_suite).
+# "causal_raw_previous" has the same meaning as the RoboCasa MemoryActionStream mode of that
+# name (benchmarks/robocasa/eval/eval_standard_3view.py). "previous_kept_frame" differs from
+# the RoboCasa "stage2_selected_previous" mode, which delays the action by one raw step.
+MEMORY_ACTION_ALIGNMENTS = ("causal_raw_previous", "previous_kept_frame")
 
 
 def rotvec_to_6d(rotvec):
@@ -65,7 +81,8 @@ class CosmoMemoryBuffer:
     def __init__(self, cosmo, siglip_fn, chunk_frames=8, downsample=2, num_views=1,
                  state_dim=16, action_dim=12, latent_dim=16, max_steps=2048,
                  action_encoding="raw_delta", proprio_encoding="raw_delta", pool_hw=None,
-                 pool_h=None, pool_w=None, wan_h=0, wan_w=0):
+                 pool_h=None, pool_w=None, wan_h=0, wan_w=0,
+                 memory_action_alignment="causal_raw_previous"):
         self.cosmo = cosmo
         self.siglip_fn = siglip_fn
         self.chunk_frames = chunk_frames
@@ -81,6 +98,12 @@ class CosmoMemoryBuffer:
         if proprio_encoding not in ("raw_delta", "raw"):
             raise ValueError(f"unknown proprio_encoding: {proprio_encoding!r}")
         self.proprio_encoding = proprio_encoding
+        if memory_action_alignment not in MEMORY_ACTION_ALIGNMENTS:
+            raise ValueError(
+                f"unknown memory action alignment {memory_action_alignment!r}; "
+                f"expected one of {MEMORY_ACTION_ALIGNMENTS}"
+            )
+        self.memory_action_alignment = memory_action_alignment
         # FIX(eval parity): pool consolidated Wan latents to pool_h x pool_w per view, EXACTLY as
         # training dataset._gather_cosmo_bottleneck does. robocasa: square 8x8 grid, pool_hw=2 ->
         # 4 tok/view. RoboDojo: NON-square 12x16 grid (192x256 Wan input), pool_h=pool_w=2 -> also
@@ -122,7 +145,9 @@ class CosmoMemoryBuffer:
         self._all_ds_frames_hi_tokens = []
                                      # re-encoded over the GROWING PREFIX -- causal consolidation)
         self._states = []            # every step state
-        self._actions = []           # every step action
+        self._actions = []           # memory action of every kept frame
+        self._last_kept_step = None  # raw step of the newest kept frame
+        self._action_from_last_kept = None  # action executed from that kept frame
         self._lang_emb = None
         self._seen = 0
         # O(T) streaming cache: if the frontend can make a streamer (Wan), use it to encode
@@ -141,14 +166,20 @@ class CosmoMemoryBuffer:
         _t_ab0 = time.perf_counter()
         old_consolidated_count = len(self._consolidated)
         # images: (t,v,h,w,3) uint8 ; keep num_views views ; downsample by step index
-        for i, step in enumerate(step_idx_list):
+        for i, raw_step in enumerate(step_idx_list):
+            step = int(raw_step)
+            if self._last_kept_step is not None and step == self._last_kept_step + 1:
+                # actions[i] was executed from the newest kept frame.
+                self._action_from_last_kept = np.asarray(actions[i], np.float32)
             # FIX(eval parity): training indexes action/proprio at the DOWNSAMPLED frame_idx
             # (every -th step), NOT every step. Gate states/actions by the SAME
             # downsample as frames so all three streams share the frame_idx cadence.
             if step % self.downsample != 0:
                 continue
             self._states.append(np.asarray(states[i], np.float32))
-            self._actions.append(np.asarray(actions[i], np.float32))
+            self._actions.append(self._memory_action(step, actions[i]))
+            self._last_kept_step = step
+            self._action_from_last_kept = None
             self._all_ds_frames.append(np.asarray(images[i, :self.num_views]))  # (V,h,w,3)
             if images_siglip is not None:
                 _hi = np.asarray(images_siglip[i, :self.num_views])
@@ -205,6 +236,21 @@ class CosmoMemoryBuffer:
             _ms = (time.perf_counter() - _t_ab0) * 1000.0
             self._log_timing("add_buffer", _ms, n_ds=len(self._all_ds_frames),
                              rec=len(self._recent_frames))
+
+    def _memory_action(self, step, supplied):
+        """Return the memory action of the kept frame at raw ``step``."""
+        supplied = np.asarray(supplied, np.float32)
+        if self.memory_action_alignment == "causal_raw_previous":
+            return supplied
+        if self._last_kept_step is None:
+            return np.zeros_like(supplied)  # Eq. A.1: a^mem_0 = 0
+        if self._action_from_last_kept is None:
+            raise RuntimeError(
+                "previous_kept_frame alignment needs the action executed from kept "
+                f"step {self._last_kept_step}, but step {self._last_kept_step + 1} was "
+                f"never buffered before kept step {step}"
+            )
+        return self._action_from_last_kept
 
     def _encode_all_chunks(self):
         """Like _finalized_encode_all but KEEPS the terminal chunk (EVAL_CONSOLIDATE_ALL).

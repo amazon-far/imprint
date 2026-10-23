@@ -626,6 +626,7 @@ def get_model(usr_args):
     configure_deterministic_inference()
 
     from rmbench_policy import create_policy
+    from mme_vla_suite.shared.cosmo_buffer import MEMORY_ACTION_ALIGNMENTS
     from mme_vla_suite.training import config as training_config
 
     required = ("checkpoint", "config_name", "history_config", "prediction_horizon")
@@ -653,6 +654,14 @@ def get_model(usr_args):
         )
     if expected_model_type == "pi0" and pi05:
         raise ValueError("native PI0 evaluation resolved a pi05=True model")
+    memory_action_alignment = str(
+        usr_args.get("memory_action_alignment", "causal_raw_previous")
+    )
+    if memory_action_alignment not in MEMORY_ACTION_ALIGNMENTS:
+        raise ValueError(
+            f"unknown memory_action_alignment {memory_action_alignment!r}; "
+            f"expected one of {MEMORY_ACTION_ALIGNMENTS}"
+        )
     policy = create_policy(
         checkpoint,
         config_name=usr_args["config_name"],
@@ -660,6 +669,8 @@ def get_model(usr_args):
         prediction_horizon=int(usr_args["prediction_horizon"]),
         seed=int(usr_args.get("seed", 42)),
     )
+    # policy.reset() builds the memory buffer of each episode with this mode.
+    policy.memory_action_alignment = memory_action_alignment
     return RoboMMETCPServerModel(
         policy,
         provenance={
@@ -673,6 +684,7 @@ def get_model(usr_args):
             "model_type": model_type,
             "pi05": pi05,
             "use_history": use_history,
+            "memory_action_alignment": memory_action_alignment,
         },
     )
 

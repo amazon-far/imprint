@@ -12,6 +12,12 @@ run on separate GPUs.
 - prediction horizon: 50
 - execution horizon: 50
 - strict previous-action causality
+- memory action alignment: `causal_raw_previous` (released evaluator default).
+  Each kept memory frame stores the action executed one raw step earlier. The
+  offline variant files (`action_causal_v*.npy`) store the action executed at
+  the previous kept frame (paper Eq. A.1). Select that rule with
+  `--memory-action-alignment previous_kept_frame`. `run_local.py` records the
+  value in `policy_server.yaml`.
 - online recent-frame features
 - `EVAL_CONSOLIDATE_ALL=1`
 - `MEMFT_LEGACY_EMPTY_RECENT=0`
