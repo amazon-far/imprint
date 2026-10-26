@@ -74,3 +74,14 @@ def test_nondeterministic_policy_does_not_set_cublas_workspace() -> None:
     run_local.configure_deterministic_cuda(environment, "0")
 
     assert "CUBLAS_WORKSPACE_CONFIG" not in environment
+
+
+def test_policy_server_settings_record_wan_chunk_alignment(tmp_path) -> None:
+    profile = run_local.PROFILES["recurrent"]
+
+    settings = run_local.policy_server_settings(
+        profile, tmp_path / "checkpoint", "replicate_first_frame"
+    )
+
+    assert settings["wan_chunk_alignment"] == "replicate_first_frame"
+    assert settings["adapter_module"] == profile["adapter"]

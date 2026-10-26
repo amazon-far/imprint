@@ -15,6 +15,14 @@ The recent visual window therefore spans every frame
 since the last finalized boundary (up to 2*chunk_frames-1 frames: the most recent complete
 provisional chunk plus the current partial chunk).
 
+Wan chunk alignment (``wan_chunk_alignment``; see mme_vla_suite.shared.wan_alignment):
+the window and the recurrent events assume that consolidated chunk c holds kept frames
+c*chunk_frames .. c*chunk_frames+chunk_frames-1. The Wan2.2 VAE encodes frame 0 alone, so
+with the default "native" alignment chunk c >= 1 holds kept frames 4c-3 .. 4c, and kept frames
+4k-3 .. 4k-1 are in neither visual stream after k chunks. "replicate_first_frame" encodes a
+copy of frame 0 first and drops its latent, so chunk c holds exactly kept frames 4c .. 4c+3.
+It needs a re-encoded store and a retrained memory; "native" reproduces the released models.
+
 Action encoding modes (config-selectable via action_encoding):
   * "raw_delta" (DEFAULT, backward compatible): cosmo_action_emb = concat(action, Δaction),
     width = 2*action_dim (=24 for the 12-dim robocasa action). Δ[i]=action[i]-action[i-1].
@@ -35,6 +43,8 @@ import jax
 import numpy as np
 
 from mme_vla_suite.shared.data_utils import pool_tokens_to_size
+from mme_vla_suite.shared.wan_alignment import NATIVE
+from mme_vla_suite.shared.wan_alignment import resolve_wan_chunk_alignment
 from openpi.shared import image_tools
 
 
@@ -65,7 +75,7 @@ class CosmoMemoryBuffer:
     def __init__(self, cosmo, siglip_fn, chunk_frames=8, downsample=2, num_views=1,
                  state_dim=16, action_dim=12, latent_dim=16, max_steps=2048,
                  action_encoding="raw_delta", proprio_encoding="raw_delta", pool_hw=None,
-                 pool_h=None, pool_w=None, wan_h=0, wan_w=0):
+                 pool_h=None, pool_w=None, wan_h=0, wan_w=0, wan_chunk_alignment=None):
         self.cosmo = cosmo
         self.siglip_fn = siglip_fn
         self.chunk_frames = chunk_frames
@@ -81,6 +91,14 @@ class CosmoMemoryBuffer:
         if proprio_encoding not in ("raw_delta", "raw"):
             raise ValueError(f"unknown proprio_encoding: {proprio_encoding!r}")
         self.proprio_encoding = proprio_encoding
+        self.wan_chunk_alignment = resolve_wan_chunk_alignment(wan_chunk_alignment)
+        if self.wan_chunk_alignment != NATIVE and self.wan_chunk_alignment not in getattr(
+            cosmo, "chunk_alignments", ()
+        ):
+            raise ValueError(
+                f"wan_chunk_alignment={self.wan_chunk_alignment!r} needs a frontend that "
+                f"supports it; {type(cosmo).__name__} does not"
+            )
         # FIX(eval parity): pool consolidated Wan latents to pool_h x pool_w per view, EXACTLY as
         # training dataset._gather_cosmo_bottleneck does. robocasa: square 8x8 grid, pool_hw=2 ->
         # 4 tok/view. RoboDojo: NON-square 12x16 grid (192x256 Wan input), pool_h=pool_w=2 -> also
@@ -130,7 +148,14 @@ class CosmoMemoryBuffer:
         # of the O(T^2) full-prefix path. `_stream_all` holds ALL chunks the streamer has
         # emitted (incl. the currently-terminal one); `_consolidated` exposes drop-terminal
         # (== offline store's finalized_encode == encode[:-1]).
-        self._streamer = self.cosmo.make_streamer(self.num_views) if hasattr(self.cosmo, "make_streamer") else None
+        self._streamer = None
+        if hasattr(self.cosmo, "make_streamer"):
+            if self.wan_chunk_alignment == NATIVE:
+                self._streamer = self.cosmo.make_streamer(self.num_views)
+            else:
+                self._streamer = self.cosmo.make_streamer(
+                    self.num_views, alignment=self.wan_chunk_alignment
+                )
         self._stream_all = []        # every chunk the streamer emitted (terminal included)
         self._pushed_ds = 0          # how many _all_ds_frames already pushed to the streamer
 
@@ -212,9 +237,10 @@ class CosmoMemoryBuffer:
         set == offline store's chunk set (which also kept all complete chunks)."""
         frames = np.stack(self._all_ds_frames, 0)
         V = frames.shape[1]
+        kw = {} if self.wan_chunk_alignment == NATIVE else {"alignment": self.wan_chunk_alignment}
         if V > 1 and hasattr(self.cosmo, "encode_multiview"):
-            return self.cosmo.encode_multiview(frames)
-        return self.cosmo.encode(frames[:, 0])
+            return self.cosmo.encode_multiview(frames, **kw)
+        return self.cosmo.encode(frames[:, 0], **kw)
 
     def _finalized_encode_all(self):
         """Causally encode the FULL growing prefix of downsampled frames seen so far and
@@ -231,6 +257,11 @@ class CosmoMemoryBuffer:
         num_views==1 with a frontend exposing only encode() falls back to the single-view path."""
         frames = np.stack(self._all_ds_frames, 0)             # (t, V, h, w, 3)
         V = frames.shape[1]
+        if self.wan_chunk_alignment != NATIVE:
+            # Aligned chunks are complete groups of kept frames; drop the newest one only
+            # (drop-terminal keeps it in the recent window).
+            raw = self._encode_all_chunks()
+            return raw[:-1] if raw.shape[0] > 0 else raw
         # Prefer the frontend's own causal drop-terminal methods when present so the online
         # path is literally the same code as the offline store builder.
         if V > 1 and hasattr(self.cosmo, "finalized_encode_multiview"):

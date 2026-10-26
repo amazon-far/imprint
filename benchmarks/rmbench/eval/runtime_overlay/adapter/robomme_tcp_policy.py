@@ -626,6 +626,7 @@ def get_model(usr_args):
     configure_deterministic_inference()
 
     from rmbench_policy import create_policy
+    from mme_vla_suite.shared.wan_alignment import resolve_wan_chunk_alignment
     from mme_vla_suite.training import config as training_config
 
     required = ("checkpoint", "config_name", "history_config", "prediction_horizon")
@@ -653,12 +654,16 @@ def get_model(usr_args):
         )
     if expected_model_type == "pi0" and pi05:
         raise ValueError("native PI0 evaluation resolved a pi05=True model")
+    # run_local.py --wan-chunk-alignment; absent means native. create_policy refuses a value
+    # that differs from the checkpoint record.
+    wan_chunk_alignment = resolve_wan_chunk_alignment(usr_args.get("wan_chunk_alignment"))
     policy = create_policy(
         checkpoint,
         config_name=usr_args["config_name"],
         history_config=history_config,
         prediction_horizon=int(usr_args["prediction_horizon"]),
         seed=int(usr_args.get("seed", 42)),
+        wan_chunk_alignment=wan_chunk_alignment,
     )
     return RoboMMETCPServerModel(
         policy,
@@ -673,6 +678,7 @@ def get_model(usr_args):
             "model_type": model_type,
             "pi05": pi05,
             "use_history": use_history,
+            "wan_chunk_alignment": wan_chunk_alignment,
         },
     )
 

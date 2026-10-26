@@ -32,6 +32,11 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from mme_vla_suite.shared.wan_alignment import NATIVE
+from mme_vla_suite.shared.wan_alignment import REPLICATE_FIRST_FRAME
+from mme_vla_suite.shared.wan_alignment import WAN_CHUNK_ALIGNMENTS
+from mme_vla_suite.shared.wan_alignment import resolve_wan_chunk_alignment
+
 _HF_REPO = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 _HF_REVISION = "b8fff7315c768468a5333511427288870b2e9635"
 _TEMPORAL_FACTOR = 4
@@ -39,6 +44,8 @@ _TEMPORAL_FACTOR = 4
 
 class WanFrontend:
     """Frozen causal Wan2.2 video VAE encoder: (T,H,W,3) uint8 -> latent tokens."""
+
+    chunk_alignments = WAN_CHUNK_ALIGNMENTS
 
     def __init__(
         self,
@@ -69,14 +76,22 @@ class WanFrontend:
         self.latent_dim = int(self._model.config.z_dim)  # 48
 
     @torch.no_grad()
-    def encode(self, frames_uint8: np.ndarray) -> np.ndarray:
+    def encode(self, frames_uint8: np.ndarray, alignment: str = NATIVE) -> np.ndarray:
         """(T,H,W,3) uint8 -> (num_chunks, spatial_tokens, latent_dim) float32.
 
-        num_chunks == T // temporal_factor (complete causal chunks only).
+        native: 1 + (T-1)//temporal_factor latents; latent 0 holds frame 0 only and latent
+        c >= 1 holds frames 4c-3..4c. replicate_first_frame: one copy of frame 0 is encoded
+        first and its latent is dropped, so T//temporal_factor latents remain and latent c
+        holds frames 4c..4c+3 (see mme_vla_suite.shared.wan_alignment).
         """
+        alignment = resolve_wan_chunk_alignment(alignment)
         frames = np.ascontiguousarray(np.asarray(frames_uint8))
         if frames.ndim != 4 or frames.shape[-1] != 3:
             raise ValueError(f"expected frames (T,H,W,3), got {frames.shape}")
+        if alignment == REPLICATE_FIRST_FRAME:
+            if frames.shape[0] == 0:
+                raise ValueError("cannot encode an empty clip")
+            frames = np.ascontiguousarray(np.concatenate([frames[:1], frames], axis=0))
 
         x = torch.from_numpy(frames).to(self.device, self.dtype)
         x = x.div(255.0).mul_(2.0).sub_(1.0)
@@ -95,6 +110,8 @@ class WanFrontend:
         latent = latent[0]  # (C, nc, h', w')
         c, nc, h, w = latent.shape
         latent = latent.permute(1, 2, 3, 0).reshape(nc, h * w, c)  # (nc, hw, C)
+        if alignment == REPLICATE_FIRST_FRAME:
+            latent = latent[1:]  # the replicated frame's own leading latent
         return latent.float().cpu().numpy()
 
     @torch.no_grad()
@@ -109,13 +126,16 @@ class WanFrontend:
         lat = self.encode(frames_uint8)
         return lat[:-1] if lat.shape[0] > 0 else lat
 
-    def encode_multiview(self, frames_v):
+    def encode_multiview(self, frames_v, alignment: str = NATIVE):
         """frames_v: (T, V, H, W, 3) uint8 -> (num_chunks, V*spatial_tokens, latent_dim) float32.
         Each view encoded independently (frozen per-view tokenizer), latents concatenated on the
         token axis. Chunk count is identical across views (same T), so alignment is exact."""
         assert frames_v.ndim == 5 and frames_v.shape[-1] == 3, f"expected (T,V,H,W,3), got {frames_v.shape}"
         V = frames_v.shape[1]
-        per_view = [self.encode(np.ascontiguousarray(frames_v[:, v])) for v in range(V)]
+        per_view = [
+            self.encode(np.ascontiguousarray(frames_v[:, v]), alignment=alignment)
+            for v in range(V)
+        ]
         nc = per_view[0].shape[0]
         assert all(p.shape[0] == nc for p in per_view), "view chunk counts differ"
         return np.concatenate(per_view, axis=1)
@@ -183,9 +203,8 @@ class WanFrontend:
         assert chunk_frames == self.temporal_factor
         frames = np.asarray(frames_uint8)
         total = frames.shape[0]
-        # encode() emits (T // temporal_factor - 1) chunks after dropping the
-        # leading causal warm-up latent. finalized_encode drops the terminal
-        # chunk on top of that.
+        # encode() emits 1 + (T - 1) // temporal_factor latents: latent 0 holds
+        # frame 0 only. finalized_encode drops the terminal latent on top of that.
         num_full = self.encode(frames).shape[0]
         num_finalized = num_full - 1
         if num_finalized <= 0:
@@ -212,9 +231,9 @@ class WanFrontend:
         """Yield the underlying frozen VAE's parameters."""
         return self._model.parameters()
 
-    def make_streamer(self, num_views: int = 1):
+    def make_streamer(self, num_views: int = 1, alignment: str = NATIVE):
         """Create a WanStreamingEncoder sharing this frozen VAE (O(T) inference cache)."""
-        return WanStreamingEncoder(self, num_views=num_views)
+        return WanStreamingEncoder(self, num_views=num_views, alignment=alignment)
 
 
 class WanStreamingEncoder:
@@ -234,8 +253,9 @@ class WanStreamingEncoder:
     on episode boundary.
     """
 
-    def __init__(self, frontend: "WanFrontend", num_views: int = 1):
+    def __init__(self, frontend: "WanFrontend", num_views: int = 1, alignment: str = NATIVE):
         self.fe = frontend
+        self.alignment = resolve_wan_chunk_alignment(alignment)
         self.model = frontend._model
         self.device = frontend.device
         self.dtype = frontend.dtype
@@ -249,6 +269,7 @@ class WanStreamingEncoder:
         self._feat_map = [None] * self.num_views     # each: the VAE's _enc_feat_map list
         self._pending = [[] for _ in range(self.num_views)]   # list of (H,W,3) uint8 per view
         self._iter = [0] * self.num_views            # groups fed so far (0 -> next is frame0)
+        self._needs_leading_copy = self.alignment == REPLICATE_FIRST_FRAME
         try:
             self.model.clear_cache()
         except Exception:
@@ -298,6 +319,12 @@ class WanStreamingEncoder:
         for v in range(self.num_views):
             for i in range(n):
                 self._pending[v].append(new_frames_v[i, v])
+        if self._needs_leading_copy and n > 0:
+            # replicate_first_frame: Wan's one-frame leading group is a copy of frame 0, so
+            # every emitted chunk holds four kept frames. Its latent is dropped below.
+            for v in range(self.num_views):
+                self._pending[v].insert(0, np.array(self._pending[v][0], copy=True))
+            self._needs_leading_copy = False
         # emit as many complete groups as are available (all views advance in lockstep since
         # they share the same frame timeline -> identical group availability).
         new_chunks = []
@@ -305,11 +332,14 @@ class WanStreamingEncoder:
             need = 1 if self._iter[0] == 0 else self.tf
             if len(self._pending[0]) < need:
                 break
+            leading_copy = self.alignment == REPLICATE_FIRST_FRAME and self._iter[0] == 0
             per_view_lat = []
             for v in range(self.num_views):
                 grp = self._pending[v][:need]
                 self._pending[v] = self._pending[v][need:]
                 per_view_lat.append(self._encode_group_view(v, grp))
                 self._iter[v] += 1
+            if leading_copy:
+                continue  # causal state is kept; the replicated frame's latent is dropped
             new_chunks.append(np.concatenate(per_view_lat, axis=0))  # (V*spatial, latent)
         return new_chunks

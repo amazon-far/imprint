@@ -23,8 +23,11 @@ _INSTALLED = False
 class BatchedWanStreamingEncoder:
     """Wan causal streamer with camera views carried in the batch dimension."""
 
-    def __init__(self, frontend, num_views: int = 1):
+    def __init__(self, frontend, num_views: int = 1, alignment: str = "native"):
+        from mme_vla_suite.shared.wan_alignment import resolve_wan_chunk_alignment
+
         self.fe = frontend
+        self.alignment = resolve_wan_chunk_alignment(alignment)
         self.model = frontend._model
         self.device = frontend.device
         self.dtype = frontend.dtype
@@ -36,9 +39,13 @@ class BatchedWanStreamingEncoder:
         self.reset()
 
     def reset(self) -> None:
+        from mme_vla_suite.shared.wan_alignment import REPLICATE_FIRST_FRAME
+
         self._feat_map = None
         self._pending: list[np.ndarray] = []
         self._iter = 0
+        self._replicate_first = self.alignment == REPLICATE_FIRST_FRAME
+        self._needs_leading_copy = self._replicate_first
         try:
             self.model.clear_cache()
         except Exception:
@@ -103,6 +110,11 @@ class BatchedWanStreamingEncoder:
                 f"{frames.shape}"
             )
         self._pending.extend(np.ascontiguousarray(frame) for frame in frames)
+        if self._needs_leading_copy and self._pending:
+            # replicate_first_frame: the one-frame leading Wan group is a copy of frame 0,
+            # so each emitted chunk holds four kept frames. Its latent is dropped below.
+            self._pending.insert(0, np.array(self._pending[0], copy=True))
+            self._needs_leading_copy = False
 
         chunks = []
         while True:
@@ -111,8 +123,11 @@ class BatchedWanStreamingEncoder:
                 break
             group = np.stack(self._pending[:needed], axis=0)
             del self._pending[:needed]
-            chunks.append(self._encode_group(group))
+            leading_copy = self._replicate_first and self._iter == 0
+            latent = self._encode_group(group)
             self._iter += 1
+            if not leading_copy:
+                chunks.append(latent)
         return chunks
 
 
@@ -327,8 +342,10 @@ def install_optimized_runtime() -> dict[str, object]:
             WanFrontend.make_streamer
         )
 
-        def make_batched_streamer(self, num_views: int = 1):
-            return BatchedWanStreamingEncoder(self, num_views=num_views)
+        def make_batched_streamer(self, num_views: int = 1, alignment: str = "native"):
+            return BatchedWanStreamingEncoder(
+                self, num_views=num_views, alignment=alignment
+            )
 
         WanFrontend.make_streamer = make_batched_streamer
 
@@ -433,7 +450,10 @@ def optimized_warmup_runtime(server) -> dict[str, object]:
         )
         if legacy_factory is None:
             raise RuntimeError("legacy Wan streamer factory is unavailable")
-        legacy_streamer = legacy_factory(memory_buffer.num_views)
+        legacy_streamer = legacy_factory(
+            memory_buffer.num_views,
+            alignment=getattr(memory_buffer, "wan_chunk_alignment", "native"),
+        )
         started = time.perf_counter()
         legacy_chunks = legacy_streamer.push(wan_frames)
         legacy_streamer.reset()
@@ -445,7 +465,10 @@ def optimized_warmup_runtime(server) -> dict[str, object]:
     else:
         legacy_chunks = None
 
-    streamer = frontend.make_streamer(memory_buffer.num_views)
+    streamer = frontend.make_streamer(
+        memory_buffer.num_views,
+        alignment=getattr(memory_buffer, "wan_chunk_alignment", "native"),
+    )
     if not isinstance(streamer, BatchedWanStreamingEncoder):
         raise RuntimeError("optimized Wan streamer patch was not applied")
     started = time.perf_counter()

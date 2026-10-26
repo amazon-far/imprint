@@ -5,6 +5,7 @@ for a SPECIFIC variant, runs the frozen Stage-1 bottleneck, and saves (256, mem_
 per (episode, step, variant).
 
 Output: <out>/ep{episode}_t{step}.npz  {v{k}: (256,1024) fp16 for each causal variant}
+and <out>/wan_chunk_alignment.txt (checked by the Stage-2 loader; see shared/wan_alignment.py).
 Loading these at Stage-2 replaces ~18.5MB/sample of cosmo inputs with ~0.5MB tokens.
 """
 import argparse, collections, json, os
@@ -34,6 +35,7 @@ def main(argv=None):
     import flax.traverse_util as trav
     from omegaconf import OmegaConf
     from mme_vla_suite.training.pretrain_loss import make_stage1_modules
+    from mme_vla_suite.shared import wan_alignment
 
     cfg = OmegaConf.load(args.config)
     cbm = cfg.cosmo_bottleneck_memory
@@ -68,6 +70,9 @@ def main(argv=None):
     gd, state = nnx.split(bneck)
     flat = trav.flatten_dict(state.to_pure_dict())
     s1 = np.load(args.stage1_ckpt, allow_pickle=True)
+    wan_alignment.require_recorded_alignment(
+        wan_alignment.stage1_checkpoint_alignment(s1), cbm, where=args.stage1_ckpt
+    )
     nset = 0
     n_ckpt = 0
     missing = []
@@ -126,6 +131,7 @@ def main(argv=None):
     def load_episode(epi_dir):
         vi = json.load(open(os.path.join(epi_dir, "variant_index.json")))
         chunk_index = json.load(open(os.path.join(epi_dir, "chunk_index.json")))
+        wan_alignment.require_store_alignment(chunk_index, cbm, where=epi_dir)
         latents = [
             np.load(os.path.join(epi_dir, f"latents_v{v}.npy"), mmap_mode="r")
             for v in range(n_variants)
@@ -217,6 +223,15 @@ def main(argv=None):
     if args.max_samples:
         samples = samples[:args.max_samples]
     os.makedirs(args.out, exist_ok=True)
+    if any(name.endswith(".npz") for name in os.listdir(args.out)):
+        # Existing tokens are kept, so they must use the same alignment (no record: native).
+        # Each shard writes the record before its first tokens.
+        wan_alignment.require_recorded_alignment(
+            wan_alignment.read_alignment_record(args.out), cbm, where=args.out
+        )
+    wan_alignment.write_alignment_record(
+        args.out, wan_alignment.wan_chunk_alignment_from_config(cbm)
+    )
     mine = [i for i in range(len(samples)) if i % args.nshard == args.shard]
     print(
         f"[shard {args.shard}/{args.nshard}] {len(mine)} samples, "

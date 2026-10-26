@@ -172,6 +172,17 @@ def main(config):
             str(history_config_name),
             encoding="utf-8",
         )
+        # The policy load refuses an evaluation config with another Wan chunk alignment.
+        from mme_vla_suite.models.config.utils import get_history_config
+        from mme_vla_suite.shared.wan_alignment import record_training_alignment
+        from openpi.shared import download as _download
+
+        _stage1_ckpt = getattr(config.weight_loader, "stage1_ckpt", None)
+        record_training_alignment(
+            config.checkpoint_dir,
+            getattr(get_history_config(history_config_name), "cosmo_bottleneck_memory", None),
+            stage1_ckpt=_download.maybe_download(_stage1_ckpt) if _stage1_ckpt else None,
+        )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
     # ---- mme data loader: builds the DataConfig from the factory, then the

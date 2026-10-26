@@ -7,6 +7,17 @@ from pathlib import Path
 
 import numpy as np
 
+# Mirrors mme_vla_suite.shared.wan_alignment (kept inline: this script imports numpy only).
+WAN_CHUNK_ALIGNMENTS = ("native", "replicate_first_frame")
+
+
+def expected_stored_chunks(num_frames: int, chunk_frames: int, alignment: str) -> int:
+    """native: finalized_encode drops the terminal Wan latent -> (n - 1) // cf chunks.
+    replicate_first_frame: every complete group of cf kept frames -> n // cf chunks."""
+    if alignment == "native":
+        return (num_frames - 1) // chunk_frames
+    return num_frames // chunk_frames
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -16,6 +27,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-dim", type=int, required=True)
     parser.add_argument("--proprio-dim", type=int, required=True)
     parser.add_argument("--full", action="store_true")
+    parser.add_argument(
+        "--wan-chunk-alignment",
+        choices=WAN_CHUNK_ALIGNMENTS,
+        default=None,
+        help="Require this Wan chunk alignment in every checked chunk_index.json "
+        "(default: accept the recorded value; absent means native).",
+    )
     return parser.parse_args()
 
 
@@ -24,7 +42,12 @@ def load_payload(path: Path) -> dict:
     return value.item() if isinstance(value, np.ndarray) and value.shape == () else value
 
 
-def validate_episode(path: Path, action_dim: int, proprio_dim: int) -> None:
+def validate_episode(
+    path: Path,
+    action_dim: int,
+    proprio_dim: int,
+    wan_chunk_alignment: str | None = None,
+) -> None:
     dino = np.load(path / "dinov3.npy", mmap_mode="r")
     if dino.ndim != 4 or tuple(dino.shape[1:]) != (3, 64, 768):
         raise ValueError(f"{path}: unexpected DINO shape {dino.shape}")
@@ -46,9 +69,18 @@ def validate_episode(path: Path, action_dim: int, proprio_dim: int) -> None:
         if not variant_index_path.is_file() or not chunk_index_path.is_file():
             raise FileNotFoundError(f"{path}: missing variant or chunk index")
         variant_index = json.loads(variant_index_path.read_text())
-        chunk_frames = int(json.loads(chunk_index_path.read_text())["chunk_frames"])
+        chunk_index = json.loads(chunk_index_path.read_text())
+        chunk_frames = int(chunk_index["chunk_frames"])
         if chunk_frames < 1:
             raise ValueError(f"{chunk_index_path}: chunk_frames must be positive")
+        alignment = str(chunk_index.get("wan_chunk_alignment", "native"))
+        if alignment not in WAN_CHUNK_ALIGNMENTS:
+            raise ValueError(f"{chunk_index_path}: unknown wan_chunk_alignment {alignment!r}")
+        if wan_chunk_alignment is not None and alignment != wan_chunk_alignment:
+            raise ValueError(
+                f"{chunk_index_path}: wan_chunk_alignment={alignment!r}, "
+                f"expected {wan_chunk_alignment!r}"
+            )
         if len(variants) != 8:
             raise ValueError(f"{path}: expected eight causal-action variants")
 
@@ -93,11 +125,11 @@ def validate_episode(path: Path, action_dim: int, proprio_dim: int) -> None:
                     f"{variant_index_path}: v{variant} n_frames={metadata_frames} "
                     f"but frame_idx has {frame_idx.size} entries"
                 )
-            expected_chunks = (frame_idx.size - 1) // chunk_frames
+            expected_chunks = expected_stored_chunks(frame_idx.size, chunk_frames, alignment)
             if metadata_chunks != expected_chunks:
                 raise ValueError(
                     f"{variant_index_path}: v{variant} n_chunks={metadata_chunks}, "
-                    f"expected {expected_chunks} finalized chunks"
+                    f"expected {expected_chunks} {alignment} chunks"
                 )
             if latents.ndim != 3 or latents.shape[0] != expected_chunks:
                 raise ValueError(
@@ -137,7 +169,9 @@ def main() -> None:
 
     selected = episodes if args.full else episodes[: min(3, len(episodes))]
     for episode in selected:
-        validate_episode(episode, args.action_dim, args.proprio_dim)
+        validate_episode(
+            episode, args.action_dim, args.proprio_dim, args.wan_chunk_alignment
+        )
 
     stats = policy_store / "meta/stats.json"
     data = policy_store / "data"

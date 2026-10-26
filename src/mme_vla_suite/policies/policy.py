@@ -34,6 +34,7 @@ def _load_cosmo_frontend(variant: str):
 
 def _build_cosmo_buffer(config, siglip_fn):
     from mme_vla_suite.shared.cosmo_buffer import CosmoMemoryBuffer
+    from mme_vla_suite.shared.wan_alignment import wan_chunk_alignment_from_config
     cb = config.cosmo_bottleneck_memory
     action_encoding = getattr(cb, "action_encoding", "raw_delta")
     proprio_encoding = getattr(cb, "proprio_encoding", "raw_delta")
@@ -57,7 +58,9 @@ def _build_cosmo_buffer(config, siglip_fn):
         # grid-agnostic pooling for NON-square grids (RoboDojo 12x16). Absent -> robocasa 8x8 path.
         pool_h=(int(getattr(cb, "pool_h", 0)) or None),
         pool_w=(int(getattr(cb, "pool_w", 0)) or None),
-        wan_h=int(getattr(cb, "wan_h", 0)), wan_w=int(getattr(cb, "wan_w", 0)))
+        wan_h=int(getattr(cb, "wan_h", 0)), wan_w=int(getattr(cb, "wan_w", 0)),
+        # Absent -> "native" (the released stores and checkpoints). See shared/wan_alignment.py.
+        wan_chunk_alignment=wan_chunk_alignment_from_config(cb))
 
 
 class MME_VLA_Policy:

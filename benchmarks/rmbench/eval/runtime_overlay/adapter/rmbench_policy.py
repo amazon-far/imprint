@@ -142,6 +142,7 @@ def create_policy(
     history_config: str | None = DEFAULT_HISTORY_CONFIG,
     prediction_horizon: int = 50,
     seed: int = 42,
+    wan_chunk_alignment: str | None = None,
 ):
     checkpoint_dir = pathlib.Path(checkpoint_dir).resolve()
     ensure_checkpoint_history(checkpoint_dir, history_config)
@@ -154,6 +155,7 @@ def create_policy(
         train_config,
         checkpoint_dir,
         seed=seed,
+        wan_chunk_alignment=wan_chunk_alignment,
     )
 
 

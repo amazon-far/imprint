@@ -34,6 +34,32 @@ The first causal action is zero and subsequent entries are shifted by one:
 `action_causal[t] = action[t-1]`. Variant actions must be sampled with the same
 frame IDs as their corresponding visual variant.
 
+### Wan chunk alignment
+
+The memory reads Wan latent `c` as kept frames `4c` to `4c+3`. The causal
+Wan2.2 VAE encodes the first frame alone, so in the released stores (the
+`native` alignment) latent `c >= 1` holds kept frames `4c-3` to `4c`. After `k`
+chunks, kept frames `4k-3` to `4k-1` are in neither the latent stream nor the
+recent window, and recurrent chunk event `c` pairs these latents with the
+actions and states of kept frames `4c` to `4c+3`. The released checkpoints
+were trained this way, so `native` stays the default.
+
+To train with exact alignment, set
+`cosmo_bottleneck_memory.wan_chunk_alignment: replicate_first_frame`. The
+frontend then encodes a copy of frame 0 first and drops its latent. Build a
+derived store with
+`python -m mme_vla_suite.dataset_builder.reencode_wan_latents` and retrain
+both stages. This tool supports only the RMBench store layout: `frames.npy` at
+the Wan input size in each episode, and latents pooled per view on disk. The
+online (`latent_source: online`) path supports only `native`.
+
+The store, the Stage 1 checkpoint (`metadata/wan_chunk_alignment`), the
+`precompute_mem.py` output and the Stage 2 run directory
+(`wan_chunk_alignment.txt`) record the alignment. A missing record means
+`native`. Training, precompute and policy load refuse a record that differs
+from the config. For RMBench evaluation, pass the same value to
+`benchmarks/rmbench/eval/run_local.py --wan-chunk-alignment`.
+
 ## Stage 1
 
 Stage 1 trains only the memory encoder and reconstruction decoder. The VLA is

@@ -61,6 +61,31 @@ def _effective_history_config(
     return recorded
 
 
+def _apply_wan_chunk_alignment(history_config, checkpoint_dir, requested):
+    """Set a requested Wan chunk alignment and refuse a mismatch with the checkpoint record.
+
+    The memory works only with the alignment that it was trained with, so this check also
+    applies when IMPRINT_PREFER_REQUESTED_HISTORY_CONFIG=1 selects the requested YAML.
+    """
+    from omegaconf import open_dict
+
+    from mme_vla_suite.shared import wan_alignment
+
+    cbm = None if history_config is None else getattr(history_config, "cosmo_bottleneck_memory", None)
+    if requested is not None:
+        requested = wan_alignment.resolve_wan_chunk_alignment(requested)
+        if cbm is not None:
+            with open_dict(cbm):
+                cbm.wan_chunk_alignment = requested
+        elif requested != wan_alignment.NATIVE:
+            raise ValueError(f"wan_chunk_alignment={requested!r} needs a cosmo_bottleneck_memory")
+    run_dir = checkpoint_dir.parent
+    wan_alignment.require_recorded_alignment(
+        wan_alignment.read_alignment_record(run_dir),
+        cbm,
+        where=run_dir / wan_alignment.ALIGNMENT_RECORD,
+    )
+
 
 def create_trained_policy(
     train_config: _config.TrainConfig,
@@ -71,6 +96,7 @@ def create_trained_policy(
     sample_kwargs: dict[str, Any] | None = None,
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
+    wan_chunk_alignment: str | None = None,
 ) -> _policy.MME_VLA_Policy:
 
     checkpoint_dir = pathlib.Path(checkpoint_dir)
@@ -99,6 +125,8 @@ def create_trained_policy(
     logging.info("Loading model...")
     _restored = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
     model = train_config.model.load(_restored)
+    # None keeps the alignment of the history config. See shared/wan_alignment.py.
+    _apply_wan_chunk_alignment(model.history_config, checkpoint_dir, wan_chunk_alignment)
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
 
     if norm_stats is None:

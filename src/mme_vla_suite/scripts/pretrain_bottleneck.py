@@ -367,8 +367,11 @@ def _prefetch(iterator, depth):
     return consume()
 
 
-def _load_stage1_checkpoint_into_modules(modules, ckpt_path):
+def _load_stage1_checkpoint_into_modules(modules, ckpt_path, *, cosmo_bottleneck_memory):
     import flax.traverse_util as _trav
+
+    from mme_vla_suite.shared.wan_alignment import require_recorded_alignment
+    from mme_vla_suite.shared.wan_alignment import stage1_checkpoint_alignment
 
     s1 = np.load(ckpt_path, allow_pickle=True)
     expected_architecture = str(
@@ -386,6 +389,10 @@ def _load_stage1_checkpoint_into_modules(modules, ckpt_path):
             f"Stage-1 checkpoint {ckpt_path} has no architecture metadata; "
             f"refusing to load it into {expected_architecture!r}"
         )
+    # The resumed weights must use the Wan chunk alignment of this run (no record: native).
+    require_recorded_alignment(
+        stage1_checkpoint_alignment(s1), cosmo_bottleneck_memory, where=ckpt_path
+    )
 
     def _load_one(module, prefix):
         gd, st = nnx.split(module)
@@ -499,6 +506,17 @@ def make_dataloader(args, config):
     # random precomputed variant's latents from the var8 store (fast, ~0.1s/iter). Both index the
     # per-frame streams (recent/action/proprio/reward) at the SAME frame_idx as the latents.
     LATENT_SOURCE = str(getattr(cbm, "latent_source", "online")) if cbm else "online"
+    from mme_vla_suite.shared.wan_alignment import NATIVE as _WAN_NATIVE
+    from mme_vla_suite.shared.wan_alignment import require_feature_store_alignment
+    from mme_vla_suite.shared.wan_alignment import wan_chunk_alignment_from_config
+    if LATENT_SOURCE == "offline":
+        # Fail before training if any episode's latents use another Wan chunk alignment.
+        require_feature_store_alignment(args.store, cbm)
+    elif wan_chunk_alignment_from_config(cbm) != _WAN_NATIVE:
+        raise NotImplementedError(
+            "wan_chunk_alignment other than 'native' is implemented for latent_source: offline "
+            "only; re-encode the store with mme_vla_suite.dataset_builder.reencode_wan_latents"
+        )
     WAN_RES = int(getattr(cbm, "wan_input_res", 0)) or None
     POOL_HW = int(getattr(cbm, "pool_hw", 0)) or None
     POOL_H = int(getattr(cbm, "pool_h", 0)) or None
@@ -662,6 +680,8 @@ def make_dataloader(args, config):
             else cached["latents"][v]
         )   # (nc_full, V*spatial, 48)
         # keep chunks whose frames are all <= t (finalized within [0,t]); drop terminal like online.
+        # The recent window starts at kept frame 4*nc. With native Wan latents chunk c >= 1
+        # holds kept frames 4c-3..4c, not 4c..4c+3 (see shared/wan_alignment.py).
         nc = max(0, n_jit // 4)
         latent_dim = lat.shape[-1]
         # FIX(bug1): allow ZERO chunks for early samples (n_jit<4 -> nc=0). Forcing >=1
@@ -924,6 +944,11 @@ def main(argv=None):
         force=True,
     )
     config = OmegaConf.load(args.config)
+    from mme_vla_suite.shared.wan_alignment import wan_chunk_alignment_from_config
+
+    wan_chunk_alignment = wan_chunk_alignment_from_config(
+        getattr(config, "cosmo_bottleneck_memory", None)
+    )
     _configure_visual_stream(config, args.store)
     _configure_compact_alignment(config, args.store)
 
@@ -951,7 +976,11 @@ def main(argv=None):
         dtype=compute_dtype,
     )
     if args.resume_stage1_ckpt:
-        modules = _load_stage1_checkpoint_into_modules(modules, args.resume_stage1_ckpt)
+        modules = _load_stage1_checkpoint_into_modules(
+            modules,
+            args.resume_stage1_ckpt,
+            cosmo_bottleneck_memory=getattr(config, "cosmo_bottleneck_memory", None),
+        )
     graphdef, state = nnx.split((modules["bottleneck"], modules["decoder"]))
 
     lr_decay_steps = args.lr_decay_steps or args.num_steps
@@ -1081,7 +1110,10 @@ def main(argv=None):
                 )
             if step % args.ckpt_every == 0:
                 bmk, dec = nnx.merge(graphdef, state)
-                _save_checkpoint(args.checkpoint_dir, step, {"bottleneck": bmk, "decoder": dec})
+                _save_checkpoint(
+                    args.checkpoint_dir, step, {"bottleneck": bmk, "decoder": dec},
+                    wan_chunk_alignment=wan_chunk_alignment,
+                )
                 _save_training_state(args.checkpoint_dir, step, state, opt_state)
                 last_saved_step = step
                 if (
@@ -1108,7 +1140,10 @@ def main(argv=None):
                     logger.info("ORDER_PROBE step=%d %s -> %s", step, probe_metrics, probe_path)
     if step > 0 and step != last_saved_step and not args.skip_final_checkpoint:
         bmk, dec = nnx.merge(graphdef, state)
-        _save_checkpoint(args.checkpoint_dir, step, {"bottleneck": bmk, "decoder": dec})
+        _save_checkpoint(
+            args.checkpoint_dir, step, {"bottleneck": bmk, "decoder": dec},
+            wan_chunk_alignment=wan_chunk_alignment,
+        )
         _save_training_state(args.checkpoint_dir, step, state, opt_state)
 
 
@@ -1128,7 +1163,7 @@ def _module_flat_params(module, prefix):
     return {prefix + "/" + "/".join(str(x) for x in k): np.asarray(v) for k, v in flat.items()}
 
 
-def _save_checkpoint(checkpoint_dir, step, modules):
+def _save_checkpoint(checkpoint_dir, step, modules, *, wan_chunk_alignment):
     """Checkpoint bottleneck+decoder params to a .npz whose keys the Stage-2 weight loader
     consumes directly: 'bottleneck/<...>' (-> remapped to mem_encoder/) and 'decoder/<...>'
     (loaded into aux_decoder when Stage-2 enables auxiliary loss). NOT the jax-keystr format
@@ -1142,6 +1177,10 @@ def _save_checkpoint(checkpoint_dir, step, modules):
     flat["metadata/memory_architecture"] = np.asarray(
         str(getattr(modules["bottleneck"], "architecture_name", "perceiver_v1"))
     )
+    # Stage-2 training and precompute_mem compare this record with their config.
+    from mme_vla_suite.shared.wan_alignment import STAGE1_METADATA_KEY
+
+    flat[STAGE1_METADATA_KEY] = np.asarray(wan_chunk_alignment)
     np.savez(path, **flat)
     logger.info("saved checkpoint -> %s (%d bottleneck + decoder params)", path, len(flat))
 

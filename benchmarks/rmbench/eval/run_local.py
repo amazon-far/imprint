@@ -24,6 +24,10 @@ TASKS = (
     "swap_blocks",
 )
 
+# Same names as mme_vla_suite.shared.wan_alignment.WAN_CHUNK_ALIGNMENTS (this launcher does not
+# import mme_vla_suite).
+WAN_CHUNK_ALIGNMENTS = ("native", "replicate_first_frame")
+
 PROFILES = {
     "full_attention": {
         "config": "imprint_rmbench_full_attention_memft",
@@ -63,6 +67,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8031)
     parser.add_argument("--startup-timeout", type=int, default=900)
+    parser.add_argument(
+        "--wan-chunk-alignment",
+        choices=WAN_CHUNK_ALIGNMENTS,
+        default="native",
+        help=(
+            "Wan chunk alignment of the memory latents. native: the released checkpoints. "
+            "replicate_first_frame: a checkpoint trained on a re-encoded store. The policy "
+            "refuses a value that differs from the alignment recorded with the checkpoint."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -124,6 +138,22 @@ def verify_simulator_runtime(
         )
 
 
+def policy_server_settings(
+    profile: dict[str, str], checkpoint: Path, wan_chunk_alignment: str
+) -> dict[str, object]:
+    """Settings for serve_robomme_tcp.py, kept in the run output as policy_server.yaml."""
+    return {
+        "adapter_module": profile["adapter"],
+        "policy_name": profile["adapter"],
+        "checkpoint": str(checkpoint),
+        "config_name": profile["config"],
+        "history_config": profile["history"],
+        "prediction_horizon": 50,
+        "seed": 42,
+        "wan_chunk_alignment": wan_chunk_alignment,
+    }
+
+
 def configure_deterministic_cuda(
     environment: dict[str, str], deterministic: str
 ) -> None:
@@ -166,15 +196,7 @@ def main() -> None:
     server_config = output / "policy_server.yaml"
     server_config.write_text(
         yaml.safe_dump(
-            {
-                "adapter_module": profile["adapter"],
-                "policy_name": profile["adapter"],
-                "checkpoint": str(checkpoint),
-                "config_name": profile["config"],
-                "history_config": profile["history"],
-                "prediction_horizon": 50,
-                "seed": 42,
-            },
+            policy_server_settings(profile, checkpoint, args.wan_chunk_alignment),
             sort_keys=False,
         )
     )

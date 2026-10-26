@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
+import functools
 import json
 import logging
 import os
@@ -18,6 +19,11 @@ from mme_vla_suite.shared.mem_buffer import MemoryBufferRecurrent
 from mme_vla_suite.shared.memory_caps import max_recent_tokens
 from mme_vla_suite.shared.visual_streams import load_dino_manifest
 from mme_vla_suite.shared.visual_streams import visual_feature_filename
+from mme_vla_suite.shared.wan_alignment import NATIVE
+from mme_vla_suite.shared.wan_alignment import read_alignment_record
+from mme_vla_suite.shared.wan_alignment import require_recorded_alignment
+from mme_vla_suite.shared.wan_alignment import require_store_alignment
+from mme_vla_suite.shared.wan_alignment import wan_chunk_alignment_from_config
 from mme_vla_suite.training.episode_cache import EpisodeStoreCache
 from mme_vla_suite.training.key_event_weights import KeyEventWeightLookup
 
@@ -68,6 +74,11 @@ def _visual_feature_stream(cfg) -> str:
     stream = str(getattr(cfg, "visual_feature_stream", "siglip")) if cfg is not None else "siglip"
     visual_feature_filename(stream)
     return stream
+
+
+@functools.cache
+def _precompute_alignment(memory_dir: str) -> str:
+    return read_alignment_record(memory_dir)
 
 
 def resolve_feature_dir(dataset_path: str | Path, history_config) -> Path:
@@ -398,6 +409,8 @@ class RoboMMEDataset:
         # (16MB/sample recent-SigLIP etc). Only valid at Stage-2 (bottleneck frozen).
         _memdir = str(getattr(cfg, "precompute_memory_dir", "")) if cfg is not None else ""
         if _memdir:
+            # precompute_mem.py records the alignment of its Stage-1 and store inputs.
+            require_recorded_alignment(_precompute_alignment(_memdir), cfg, where=_memdir)
             _mp = os.path.join(_memdir, f"ep{epis_idx}_t{t}.npz")
             if os.path.exists(_mp):
                 _md = np.load(_mp)
@@ -447,6 +460,9 @@ class RoboMMEDataset:
             visual_stream = _visual_feature_stream(cfg)
             episode_store = self._get_episode_store_cache(cfg).get(epi_dir)
             chunk_index = episode_store.chunk_index
+            # latent c must hold kept frames c*cf .. c*cf+cf-1 under the SAME alignment the
+            # evaluator buffer uses (cosmo_bottleneck_memory.wan_chunk_alignment).
+            require_store_alignment(chunk_index, cfg, where=epi_dir)
             variant_chunk_frames = int(chunk_index["chunk_frames"])
             recent_mm = episode_store.recent_visual
             ap = episode_store.action_proprio
@@ -597,6 +613,12 @@ class RoboMMEDataset:
                 _off["aux_reward_target"] = _rw
             return _off
 
+        if wan_chunk_alignment_from_config(cfg) != NATIVE:
+            raise NotImplementedError(
+                "wan_chunk_alignment other than 'native' needs offline variant latents "
+                "(latent_source: offline, latents_v*.npy re-encoded with "
+                "mme_vla_suite.dataset_builder.reencode_wan_latents)"
+            )
         # chunk_index is tiny JSON -> load directly.
         with open(os.path.join(epi_dir, "chunk_index.json")) as f:
             chunk_index = json.load(f)
