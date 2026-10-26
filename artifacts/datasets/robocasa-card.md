@@ -32,5 +32,18 @@ See the manifests for per-shard SHA256 checksums. The exact patched simulator
 source is under `simulation/robocasa/environment/` in
 `Amazon-FAR/imprint_datasets`.
 
+The recorded evaluation scenes are published separately from the training
+store under `simulation/robocasa/replay/v1/` at immutable dataset revision
+`6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75`. Install and verify them with:
+
+```bash
+python scripts/reproduce/setup_robocasa_replay_assets.py \
+  --output artifacts/replay/robocasa-v1
+```
+
+The installer verifies archive SHA256
+`ce73132d4bcad7476c730db9bbf0c007346d229d4b0e72ea2e607cb123121166`
+before extracting any files.
+
 The corresponding code, launch configurations, and validation tools are
 published in the IMPRINT GitHub repository.

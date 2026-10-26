@@ -70,6 +70,7 @@ Datasets and simulator assets are in
 | --- | --- |
 | RMBench 450-episode training stores | `simulation/rmbench/450/` |
 | RoboCasa 600-episode training store | `simulation/robocasa/600/` |
+| RoboCasa recorded replay scenes | [`simulation/robocasa/replay/v1/`](https://huggingface.co/datasets/Amazon-FAR/imprint_datasets/tree/6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75/simulation/robocasa/replay/v1) |
 | MolmoAct2 evaluation metadata and language embeddings | `simulation/rmbench/molmoact2_eval_assets/` |
 | Patched RoboCasa evaluation environment | `simulation/robocasa/environment/` |
 
@@ -358,23 +359,31 @@ export ROBOCASA_PYTHON=$ROBOCASA_ROOT/.venv-mem/bin/python
 
 The setup command downloads the official RoboCasa assets (approximately
 10 GB), adds the legacy RoboCasa 0.2 assets used by the memory tasks, and
-verifies the migrated scene inventory. Recorded replay bundles remain
-task-specific and are supplied in the next step.
+verifies the migrated scene inventory.
 
-### 2. Select the replay asset for a task
+### 2. Download the recorded replay scenes
 
-| Task group | Required launcher argument |
-| --- | --- |
-| `retrieve_fruit`, `retrieve_oil` | `--retrieve-lineage-manifest` and `--retrieve-source-root` |
-| `wash_and_return`, `wash_and_return_same_location` | `--wash-scene-root` |
-| `sweeten_hot_chocolate` | `--sweeten-recovered-root` |
-| `pan_transfer` | `--pan-transfer-dataset` |
-| `rinse_cutting_board` | `--rinse-cutting-board-dataset` |
-| Five RoboCasa365 groups | `--new5-scene-root` |
+The public replay bundle contains the exact recorded XML/state inputs for all
+12 task groups, including the checksum-pinned Retrieve lineage manifest. The
+installer pins dataset revision
+`6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75` and archive SHA256
+`ce73132d4bcad7476c730db9bbf0c007346d229d4b0e72ea2e607cb123121166`:
 
-The five RoboCasa365 groups are `organize_condiments`,
-`pick_place_counter_to_sink`, `place_equal_ice_cubes`,
-`scrub_cutting_board`, and `frying_pan_adjustment`.
+```bash
+python scripts/reproduce/setup_robocasa_replay_assets.py \
+  --output artifacts/replay/robocasa-v1
+export ROBOCASA_REPLAY_ASSETS=$PWD/artifacts/replay/robocasa-v1
+```
+
+The installer downloads the archive from `Amazon-FAR/imprint_datasets`,
+verifies its SHA256, extracts it without following links, and validates the
+recorded-scene inventories and Retrieve source hashes. A successful install
+prints `ROBOCASA_REPLAY_ASSETS_READY`. Pass
+`--archive /path/to/robocasa-replay-assets-v1.tar` to install an existing
+offline download.
+
+The task-specific flags remain available as explicit overrides, but a normal
+paper reproduction only needs `--replay-assets-root`.
 
 If the preserved policy environment uses a Transformers build without native
 DINOv3 support, pass
@@ -393,7 +402,7 @@ python benchmarks/robocasa/eval/run_local.py \
   --architecture full_attention \
   --task-group organize_condiments \
   --pilot-trials 1 \
-  --new5-scene-root /path/to/robocasa365-recorded-scenes \
+  --replay-assets-root "$ROBOCASA_REPLAY_ASSETS" \
   --policy-python "$PWD/.venv/bin/python" \
   --sim-python "$ROBOCASA_PYTHON" \
   --policy-gpu 0 \
@@ -458,7 +467,7 @@ python scripts/reproduce/validate_checkpoint.py \
 | RMBench colors look swapped | Policy input is BGR by protocol; saved videos are RGB |
 | RoboCasa task is missing | Use the archived patched environment, not stock RoboCasa |
 | RoboCasa reports a missing legacy scene | Rerun setup in a new destination; successful setup prints `ROBOCASA_LEGACY_ASSETS_READY` |
-| RoboCasa replay fails immediately | Confirm the task-specific replay argument and asset inventory |
+| RoboCasa replay fails immediately | Rerun `setup_robocasa_replay_assets.py` in an empty destination and pass that root with `--replay-assets-root` |
 | CUDA out of memory during evaluation | Put policy and simulator on different GPUs |
 | RMBench setup says `nvcc` is missing | Use a CUDA development image, or set `IMPRINT_CUROBO_WHEEL` to a compatible Python 3.10 wheel |
 | CuRobo or PyTorch does not support the simulator GPU | Use L40S or a graphics-enabled Hopper host with the default upstream stack; B200 requires a separate `sm_100`-compatible PyTorch/CuRobo build |

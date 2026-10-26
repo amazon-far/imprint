@@ -29,7 +29,7 @@ _RETRIEVE_LINEAGE_MANIFEST = (
 )
 _RETRIEVE_SOURCE_ROOT = _EVALUATOR_ROOT / ".lineage_inputs" / "sources"
 _RETRIEVE_LINEAGE_MANIFEST_SHA256 = (
-    "9af92ec474288a60f038311359003fd503cb1a5db05966fd4ac0959f4bc4cc3b"
+    "1bc4b06030712c15c717d9e0f8036d950994d358854713f5bac727b43f7e4061"
 )
 
 TASK_GROUPS = {
@@ -1662,6 +1662,9 @@ def _validate_recovered_sweeten_descriptors(
     }
     _canonical_recovery_root_locators(report.get("source_root"))
     _canonical_recovery_root_locators(report.get("combined_training_root"))
+    # output_root records where the immutable recovery bundle was generated.
+    # It is provenance, not a required extraction path for evaluation.
+    _canonical_recovery_root_locators(report.get("output_root"))
     if (
         set(report) != expected_report_keys
         or type(report.get("schema_version")) is not int
@@ -1678,7 +1681,6 @@ def _validate_recovered_sweeten_descriptors(
         or not isinstance(report.get("attempts"), list)
         or any(type(value) is not int for value in report["attempts"])
         or report.get("attempts") != list(_RECOVERY_ATTEMPTS)
-        or report.get("output_root") != str(root)
     ):
         raise ValueError("Sweeten recovery report metadata is inconsistent")
     report_attempts = set(report["attempts"])

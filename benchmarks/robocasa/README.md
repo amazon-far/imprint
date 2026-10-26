@@ -53,6 +53,23 @@ export IMPRINT_CHECKPOINT=/path/to/stage2/checkpoint
 export DINOV3_MODEL_PATH=/path/to/dinov3-vitb16
 ```
 
+Download and validate the exact replay scenes for all 12 task groups:
+
+```bash
+python scripts/reproduce/setup_robocasa_replay_assets.py \
+  --output artifacts/replay/robocasa-v1
+export ROBOCASA_REPLAY_ASSETS=$PWD/artifacts/replay/robocasa-v1
+```
+
+This includes the checksum-pinned Retrieve manifest and its six HDF5 source
+datasets, Wash scenes, the recovered Sweeten scenes, Pan Transfer and Rinse
+Cutting Board scenes, and the five RoboCasa365 task bundles. The installer
+uses immutable dataset revision
+`6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75`, verifies archive SHA256
+`ce73132d4bcad7476c730db9bbf0c007346d229d4b0e72ea2e607cb123121166`,
+and prints `ROBOCASA_REPLAY_ASSETS_READY` only after all inventories and
+Retrieve source hashes pass.
+
 If the preserved policy environment predates native DINOv3 support in
 Transformers, set `DINOV3_RUNTIME_OVERLAY` to a compatible Python package
 overlay and pass `--dinov3-runtime-overlay "$DINOV3_RUNTIME_OVERLAY"`.
@@ -75,15 +92,14 @@ python benchmarks/robocasa/eval/run_local.py \
   --architecture full_attention \
   --task-group organize_condiments \
   --pilot-trials 1 \
-  --new5-scene-root /path/to/robocasa365-recorded-scenes \
+  --replay-assets-root "$ROBOCASA_REPLAY_ASSETS" \
   --sim-python "$ROBOCASA_ROOT/.venv-mem/bin/python" \
   --output outputs/robocasa/organize-condiments-smoke
 ```
 
-All replay-asset defaults are empty in the portable release. Set the
-corresponding `ROBOCASA_*` environment variables or pass every required path
-on the command line. Scene assets are distributed separately from the code
-because their license and size differ.
+`ROBOCASA_REPLAY_ASSETS` is also used as the default for
+`--replay-assets-root`. Task-specific `ROBOCASA_*` variables and command-line
+flags remain available as overrides.
 
 ## Paper-Compatible Reporting
 

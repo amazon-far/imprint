@@ -40,6 +40,23 @@ PROFILES = {
     },
 }
 
+REPLAY_ASSET_LAYOUT = {
+    "wash-scene-root": Path("wash"),
+    "retrieve-lineage-manifest": Path(
+        "retrieve/retrieve_combined350_lineage.json"
+    ),
+    "retrieve-source-root": Path("retrieve/sources"),
+    "sweeten-recovered-root": Path("sweeten"),
+    "pan-transfer-dataset": Path("pan_transfer/lerobot"),
+    "rinse-cutting-board-dataset": Path("rinse_cutting_board/lerobot"),
+    "new5-scene-root": Path("robocasa365"),
+}
+
+
+def environment_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    return None if not value else Path(value)
+
 
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[3]
@@ -76,8 +93,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--startup-timeout", type=int, default=900)
-    parser.add_argument("--memory-data-root", type=Path)
-    parser.add_argument("--memory-store", type=Path)
+    parser.add_argument(
+        "--replay-assets-root",
+        type=Path,
+        default=environment_path("ROBOCASA_REPLAY_ASSETS"),
+        help=(
+            "Extracted IMPRINT RoboCasa replay bundle. Task-specific paths "
+            "are derived from this root and may be overridden below."
+        ),
+    )
+    parser.add_argument(
+        "--memory-data-root",
+        type=Path,
+        default=environment_path("ROBOCASA_MEMORY_DATA_ROOT"),
+    )
+    parser.add_argument(
+        "--memory-store",
+        type=Path,
+        default=environment_path("ROBOCASA_MEMORY_STORE"),
+    )
     parser.add_argument(
         "--memory-replay-helper",
         type=Path,
@@ -86,13 +120,41 @@ def parse_args() -> argparse.Namespace:
             "<robocasa-root>/scripts/replay/replay_memory_demos.py."
         ),
     )
-    parser.add_argument("--wash-scene-root", type=Path)
-    parser.add_argument("--retrieve-lineage-manifest", type=Path)
-    parser.add_argument("--retrieve-source-root", type=Path)
-    parser.add_argument("--sweeten-recovered-root", type=Path)
-    parser.add_argument("--pan-transfer-dataset", type=Path)
-    parser.add_argument("--rinse-cutting-board-dataset", type=Path)
-    parser.add_argument("--new5-scene-root", type=Path)
+    parser.add_argument(
+        "--wash-scene-root",
+        type=Path,
+        default=environment_path("ROBOCASA_WASH_SCENE_ROOT"),
+    )
+    parser.add_argument(
+        "--retrieve-lineage-manifest",
+        type=Path,
+        default=environment_path("ROBOCASA_RETRIEVE_LINEAGE_MANIFEST"),
+    )
+    parser.add_argument(
+        "--retrieve-source-root",
+        type=Path,
+        default=environment_path("ROBOCASA_RETRIEVE_SOURCE_ROOT"),
+    )
+    parser.add_argument(
+        "--sweeten-recovered-root",
+        type=Path,
+        default=environment_path("ROBOCASA_SWEETEN_RECOVERED_ROOT"),
+    )
+    parser.add_argument(
+        "--pan-transfer-dataset",
+        type=Path,
+        default=environment_path("ROBOCASA_PAN_TRANSFER_DATASET"),
+    )
+    parser.add_argument(
+        "--rinse-cutting-board-dataset",
+        type=Path,
+        default=environment_path("ROBOCASA_RINSE_CUTTING_BOARD_DATASET"),
+    )
+    parser.add_argument(
+        "--new5-scene-root",
+        type=Path,
+        default=environment_path("ROBOCASA_NEW5_SCENE_ROOT"),
+    )
     return parser.parse_args()
 
 
@@ -143,8 +205,28 @@ def simulator_pythonpath_entries(root: Path) -> tuple[Path, ...]:
     return tuple(entries)
 
 
-def task_asset_paths(args: argparse.Namespace) -> dict[str, Path]:
-    values = {
+def replay_asset_paths(root: Path) -> dict[str, Path]:
+    root = root.expanduser().resolve()
+    return {
+        name: root / relative
+        for name, relative in REPLAY_ASSET_LAYOUT.items()
+    }
+
+
+def task_asset_paths(
+    args: argparse.Namespace,
+    eval_root: Path,
+) -> dict[str, Path]:
+    values = (
+        {}
+        if args.replay_assets_root is None
+        else replay_asset_paths(args.replay_assets_root)
+    )
+    values.setdefault(
+        "retrieve-lineage-manifest",
+        eval_root / "retrieve_combined350_lineage.json",
+    )
+    overrides = {
         "memory-data-root": resolved(args.memory_data_root),
         "memory-store": resolved(args.memory_store),
         "wash-scene-root": resolved(args.wash_scene_root),
@@ -155,6 +237,11 @@ def task_asset_paths(args: argparse.Namespace) -> dict[str, Path]:
         "rinse-cutting-board-dataset": resolved(args.rinse_cutting_board_dataset),
         "new5-scene-root": resolved(args.new5_scene_root),
     }
+    values.update(
+        (name, path)
+        for name, path in overrides.items()
+        if path is not None
+    )
     return {name: path for name, path in values.items() if path is not None}
 
 
@@ -192,7 +279,7 @@ def main() -> None:
     sim_python = executable_path(args.sim_python or robocasa_root / ".venv-mem/bin/python")
     policy_python = executable_path(args.policy_python)
     profile = PROFILES[args.architecture]
-    asset_paths = task_asset_paths(args)
+    asset_paths = task_asset_paths(args, eval_root)
     simulator_paths = simulator_pythonpath_entries(robocasa_root)
 
     required = (
