@@ -65,7 +65,7 @@ This includes the checksum-pinned Retrieve manifest and its six HDF5 source
 datasets, Wash scenes, the recovered Sweeten scenes, Pan Transfer and Rinse
 Cutting Board scenes, and the five RoboCasa365 task bundles. The installer
 uses immutable dataset revision
-`6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75`, verifies archive SHA256
+`eb1a5bca3eea7085f3b0a7d89e26ef2ce242e7ae`, verifies archive SHA256
 `ce73132d4bcad7476c730db9bbf0c007346d229d4b0e72ea2e607cb123121166`,
 and prints `ROBOCASA_REPLAY_ASSETS_READY` only after all inventories and
 Retrieve source hashes pass.

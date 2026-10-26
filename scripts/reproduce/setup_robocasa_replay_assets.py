@@ -13,7 +13,7 @@ import tempfile
 
 
 REPOSITORY = "Amazon-FAR/imprint_datasets"
-REPOSITORY_REVISION = "6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75"
+REPOSITORY_REVISION = "eb1a5bca3eea7085f3b0a7d89e26ef2ce242e7ae"
 ARCHIVE_PATH = (
     "simulation/robocasa/replay/v1/"
     "robocasa-replay-assets-v1.tar"

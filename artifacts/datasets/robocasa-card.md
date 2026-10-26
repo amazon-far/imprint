@@ -34,7 +34,7 @@ source is under `simulation/robocasa/environment/` in
 
 The recorded evaluation scenes are published separately from the training
 store under `simulation/robocasa/replay/v1/` at immutable dataset revision
-`6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75`. Install and verify them with:
+`eb1a5bca3eea7085f3b0a7d89e26ef2ce242e7ae`. Install and verify them with:
 
 ```bash
 python scripts/reproduce/setup_robocasa_replay_assets.py \

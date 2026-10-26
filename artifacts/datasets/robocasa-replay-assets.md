@@ -24,7 +24,7 @@ comparison evidence.
 The public artifact is pinned by:
 
 - Dataset revision:
-  `6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75`
+  `eb1a5bca3eea7085f3b0a7d89e26ef2ce242e7ae`
 - Archive SHA256:
   `ce73132d4bcad7476c730db9bbf0c007346d229d4b0e72ea2e607cb123121166`
 - Extracted regular files: 3,989

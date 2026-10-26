@@ -70,7 +70,7 @@ Datasets and simulator assets are in
 | --- | --- |
 | RMBench 450-episode training stores | `simulation/rmbench/450/` |
 | RoboCasa 600-episode training store | `simulation/robocasa/600/` |
-| RoboCasa recorded replay scenes | [`simulation/robocasa/replay/v1/`](https://huggingface.co/datasets/Amazon-FAR/imprint_datasets/tree/6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75/simulation/robocasa/replay/v1) |
+| RoboCasa recorded replay scenes | [`simulation/robocasa/replay/v1/`](https://huggingface.co/datasets/Amazon-FAR/imprint_datasets/tree/eb1a5bca3eea7085f3b0a7d89e26ef2ce242e7ae/simulation/robocasa/replay/v1) |
 | MolmoAct2 evaluation metadata and language embeddings | `simulation/rmbench/molmoact2_eval_assets/` |
 | Patched RoboCasa evaluation environment | `simulation/robocasa/environment/` |
 
@@ -366,7 +366,7 @@ verifies the migrated scene inventory.
 The public replay bundle contains the exact recorded XML/state inputs for all
 12 task groups, including the checksum-pinned Retrieve lineage manifest. The
 installer pins dataset revision
-`6f2e15fe0d28f85a5dfe0b2fbdf49fa1267dab75` and archive SHA256
+`eb1a5bca3eea7085f3b0a7d89e26ef2ce242e7ae` and archive SHA256
 `ce73132d4bcad7476c730db9bbf0c007346d229d4b0e72ea2e607cb123121166`:
 
 ```bash
