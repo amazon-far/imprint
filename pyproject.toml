@@ -32,7 +32,7 @@ dependencies = [
     "typing-extensions>=4.12.2",
     "tyro>=0.9.5",
     "wandb>=0.19.1",
-    "filelock>=3.16.1",
+    "filelock>=4.2.1",
     "huggingface-hub[cli,hf-transfer]==0.36.2",
     "beartype==0.19.0",
     "diffusers==0.38.0",
