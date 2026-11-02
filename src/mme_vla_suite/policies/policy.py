@@ -32,7 +32,7 @@ def _load_cosmo_frontend(variant: str):
     return CosmoFrontend(variant=variant, device="cuda")
 
 
-def _build_cosmo_buffer(config, siglip_fn):
+def _build_cosmo_buffer(config, siglip_fn, memory_action_alignment="causal_raw_previous"):
     from mme_vla_suite.shared.cosmo_buffer import CosmoMemoryBuffer
     cb = config.cosmo_bottleneck_memory
     action_encoding = getattr(cb, "action_encoding", "raw_delta")
@@ -57,7 +57,8 @@ def _build_cosmo_buffer(config, siglip_fn):
         # grid-agnostic pooling for NON-square grids (RoboDojo 12x16). Absent -> robocasa 8x8 path.
         pool_h=(int(getattr(cb, "pool_h", 0)) or None),
         pool_w=(int(getattr(cb, "pool_w", 0)) or None),
-        wan_h=int(getattr(cb, "wan_h", 0)), wan_w=int(getattr(cb, "wan_w", 0)))
+        wan_h=int(getattr(cb, "wan_h", 0)), wan_w=int(getattr(cb, "wan_w", 0)),
+        memory_action_alignment=memory_action_alignment)
 
 
 class MME_VLA_Policy:
@@ -97,6 +98,8 @@ class MME_VLA_Policy:
             else None
         )
         self.mem_buffer = None
+        # Evaluation-only: the RMBench adapter may select "previous_kept_frame" (cosmo_buffer.py).
+        self.memory_action_alignment = "causal_raw_previous"
 
         self.state_norm_stats = norm_stats['state']
         self.use_quantiles = use_quantiles
@@ -119,7 +122,13 @@ class MME_VLA_Policy:
                 prepare_buffer=True, vision_enc_fn=self._vision_encode,
             )
         elif self.config.representation_type == "cosmo_bottleneck":
-            self.mem_buffer = _build_cosmo_buffer(self.config, siglip_fn=self._vision_encode)
+            self.mem_buffer = _build_cosmo_buffer(
+                self.config,
+                siglip_fn=self._vision_encode,
+                memory_action_alignment=getattr(
+                    self, "memory_action_alignment", "causal_raw_previous"
+                ),
+            )
         else:
             self.mem_buffer = MemoryBuffer(
                 num_views=self.config.num_views,

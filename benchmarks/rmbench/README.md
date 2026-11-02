@@ -14,6 +14,9 @@ The paper protocol is:
 - strict causal action history
 - online recent DINOv3 features
 - `EVAL_CONSOLIDATE_ALL=1`
+- memory action alignment `causal_raw_previous` (released evaluator default;
+  the offline variant files use the action executed at the previous kept
+  frame, paper Eq. A.1; see `--memory-action-alignment`)
 - policy input color order `bgr`
 
 Install RMBench separately, then run a smoke:

@@ -29,10 +29,23 @@ XLA GPU operations with a deterministic cuBLAS workspace. Keep
 Setting it to `0` restores the faster historical execution semantics but does
 not reproduce a particular historical checkpoint.
 
-At history step `t`, the action memory receives the previously executed action.
-The first causal action is zero and subsequent entries are shifted by one:
-`action_causal[t] = action[t-1]`. Variant actions must be sampled with the same
-frame IDs as their corresponding visual variant.
+At history step `t`, the action memory receives a previously executed action.
+Two streams exist:
+
+- `action_proprio.npy` key `action_causal` is the canonical stream at every raw
+  step: zero first, then `action_causal[t] = action[t-1]`. The online Stage-1
+  path and the loader fallback for stores without variant files read it at the
+  kept frames.
+- `action_causal_v*.npy` belongs to visual variant `v*` and its frame IDs
+  `f_0, ..., f_n`: zero first, then the action executed at the previous kept
+  frame, `action[f_(j-1)]` (paper Eq. A.1). The offline Stage-1 and Stage-2
+  loaders read these files. Do not index the canonical stream at skipped frame
+  IDs to rebuild them.
+
+The RMBench evaluator stores the action executed one raw step earlier by
+default (`causal_raw_previous`). With kept frames two raw steps apart, this
+differs from the variant files. `run_local.py --memory-action-alignment
+previous_kept_frame` applies the variant-file rule at evaluation.
 
 ## Stage 1
 
