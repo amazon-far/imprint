@@ -6,7 +6,7 @@ dependencies = [
     "dm-tree>=0.1.8",
     "msgpack>=1.0.5",
     "numpy",
-    "pillow>=9.0.0",
+    "pillow>=13.0.0",
     "tree>=0.2.4",
     "websockets>=11.0",
 ]
