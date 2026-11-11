@@ -88,7 +88,7 @@ opencv-python==4.13.0.92
 orderly-set==5.5.0
 packaging==26.2
 pandas==2.3.3
-pillow==12.2.0
+pillow==13.0.0
 platformdirs==4.10.0
 pluggy==1.6.0
 propcache==0.5.2
