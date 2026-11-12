@@ -130,7 +130,7 @@ termcolor==3.3.0
 tianshou==0.4.10
 toml==0.10.2
 tomli==2.4.1
-torch==2.7.1
+torch==2.13.0
 torchcodec==0.5
 torchvision==0.22.1
 tqdm==4.68.3
